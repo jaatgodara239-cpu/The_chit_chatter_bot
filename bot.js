@@ -44,7 +44,7 @@ const STRINGS = {
     share_btn: '🔗 दोस्तों को जोड़ें',
     searching: '🔍 हिंदी में बात करने के लिए पार्टनर ढूंढा जा रहा है। प्रतीक्षा करें...',
     priority_search: '⚡ प्रायोरिटी मैच सक्रिय! आपको कतार में सबसे आगे रखा गया है...',
-    connected: '🎉 आप एक अजनबी से जुड़ चुके हैं! नमस्ते बोलें।\n(बदलने के लिए "⏭️ अगला / Skip" दबाएं)',
+    connected: '🎉 आप एक अजनबी से जुड़ चुके हैं! नमस्ते बोलें।\n(बदलने के लिए "⏭️️ अगला / Skip" दबाएं)',
     disconnected: '❌ सामने वाले ने चैट छोड़ दी। फिर खोजने के लिए "🔎 पार्टनर ढूंढें" दबाएं।',
     stopped: 'चैट समाप्त हो गई। नई बातचीत के लिए "🔎 पार्टनर ढूंढें" दबाएं।',
     already_in: 'आप पहले से चैट में हैं! नया पार्टनर ढूंढने के लिए "⏭️ अगला / Skip" दबाएं।',
@@ -120,6 +120,15 @@ async function endChat(chatId, notifyPartner = true) {
 }
 
 async function matchUser(ctx) {
+  // Ensure matchmaking runs only in private DMs
+  if (ctx.chat.type !== 'private') {
+    const botUser = ctx.botInfo.username;
+    return ctx.reply(
+      '⚠️ Anonymous 1-on-1 chats happen in private DM!\nTap below to start matching:',
+      Markup.inlineKeyboard([[Markup.button.url('🤫 Open Bot in DM', `https://t.me/${botUser}?start=group`)]])
+    );
+  }
+
   const chatId = ctx.chat.id;
   const lang = getLang(chatId);
   const t = STRINGS[lang];
@@ -132,7 +141,6 @@ async function matchUser(ctx) {
   const otherLang = lang === 'en' ? 'hi' : 'en';
   queues[otherLang] = queues[otherLang].filter((id) => id !== chatId);
 
-  // If another stranger is already in the queue, match instantly
   if (queue.length > 0) {
     const partnerId = queue.shift();
     if (partnerId === chatId) {
@@ -154,11 +162,10 @@ async function matchUser(ctx) {
       return ctx.reply(t.partner_dropped, makeKeyboard(lang));
     }
   } else {
-    // Check if user has priority queue credits
     const credits = priorityCredits.get(chatId) || 0;
     if (credits > 0) {
       priorityCredits.set(chatId, credits - 1);
-      queue.unshift(chatId); // Push to the front of the queue
+      queue.unshift(chatId);
       ctx.reply(`${t.priority_search}\n(⚡ Remaining priority credits: ${credits - 1})`, makeKeyboard(lang));
     } else {
       queue.push(chatId);
@@ -167,7 +174,7 @@ async function matchUser(ctx) {
   }
 }
 
-// Generate share link
+// Generate referral menu
 async function sendShareMenu(ctx) {
   const chatId = ctx.chat.id;
   const lang = getLang(chatId);
@@ -190,8 +197,49 @@ async function sendShareMenu(ctx) {
   await ctx.replyWithMarkdown(lang === 'hi' ? msgHi : msgEn, shareKeyboard);
 }
 
-// Start command with referral listener
+// ---------------- GROUP AUTO-WELCOME HANDLER ----------------
+bot.on('new_chat_members', async (ctx) => {
+  const members = ctx.message.new_chat_members;
+  const botUser = ctx.botInfo.username;
+
+  for (const member of members) {
+    if (member.id === ctx.botInfo.id) {
+      // The bot itself was added to the group
+      await ctx.reply(
+        `👋 Namaste everyone! I am *Chit Chatter*.\n\nUse me to find random anonymous chat partners across India!`,
+        {
+          parse_mode: 'Markdown',
+          ...Markup.inlineKeyboard([
+            [Markup.button.url('🤫 Start Anonymous Chat', `https://t.me/${botUser}?start=group_intro`)]
+          ])
+        }
+      );
+      continue;
+    }
+
+    // A regular user joined the group
+    const name = member.first_name || 'Dost';
+    const welcomeText = `👋 नमस्ते [${name}](tg://user?id=${member.id})! Welcome to the group!\n\nWant to talk 1-on-1 with a stranger across India with 100% anonymity?`;
+
+    await ctx.reply(welcomeText, {
+      parse_mode: 'Markdown',
+      ...Markup.inlineKeyboard([
+        [Markup.button.url('🤫 Start Anonymous Chat / चैट शुरू करें', `https://t.me/${botUser}?start=group_join`)]
+      ])
+    });
+  }
+});
+
+// Start command
 bot.start((ctx) => {
+  if (ctx.chat.type !== 'private') {
+    const botUser = ctx.botInfo.username;
+    return ctx.reply(
+      'Tap below to open private chat:',
+      Markup.inlineKeyboard([[Markup.button.url('Start Bot in DM', `https://t.me/${botUser}?start=menu`)]])
+    );
+  }
+
   const payload = ctx.startPayload;
   if (payload && payload.startsWith('ref_')) {
     const referrerId = payload.replace('ref_', '');
@@ -216,6 +264,7 @@ bot.command('find', matchUser);
 bot.hears([STRINGS.en.find_btn, STRINGS.hi.find_btn], matchUser);
 
 const handleSkip = async (ctx) => {
+  if (ctx.chat.type !== 'private') return;
   const chatId = ctx.chat.id;
   await endChat(chatId, true);
   await ctx.reply('⏭️ ...');
@@ -225,6 +274,7 @@ bot.command('next', handleSkip);
 bot.hears([STRINGS.en.skip_btn, STRINGS.hi.skip_btn], handleSkip);
 
 const handleStop = async (ctx) => {
+  if (ctx.chat.type !== 'private') return;
   const chatId = ctx.chat.id;
   const lang = getLang(chatId);
   const t = STRINGS[lang];
@@ -239,11 +289,11 @@ const handleStop = async (ctx) => {
 bot.command('stop', handleStop);
 bot.hears([STRINGS.en.stop_btn, STRINGS.hi.stop_btn], handleStop);
 
-// Invite / Share Handlers
 bot.command(['share', 'invite'], sendShareMenu);
 bot.hears([STRINGS.en.share_btn, STRINGS.hi.share_btn], sendShareMenu);
 
 bot.hears([STRINGS.en.lang_btn, STRINGS.hi.lang_btn], async (ctx) => {
+  if (ctx.chat.type !== 'private') return;
   const chatId = ctx.chat.id;
   const nextLang = getLang(chatId) === 'en' ? 'hi' : 'en';
   if (activePairs.has(chatId)) await endChat(chatId, true);
@@ -251,7 +301,11 @@ bot.hears([STRINGS.en.lang_btn, STRINGS.hi.lang_btn], async (ctx) => {
   ctx.reply(STRINGS[nextLang].lang_changed, makeKeyboard(nextLang));
 });
 
+// Relay messages between matched strangers
 bot.on('message', async (ctx) => {
+  // CRITICAL: Ignore messages sent in group chats so regular banter isn't interrupted
+  if (ctx.chat.type !== 'private') return;
+
   const chatId = ctx.chat.id;
   const partnerId = activePairs.get(chatId);
   const lang = getLang(chatId);
@@ -270,4 +324,3 @@ bot.on('message', async (ctx) => {
 bot.launch().then(() => console.log('Bot polling active!'));
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
-  
